@@ -337,4 +337,3 @@ async def resume(ctx):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
-.run(TOKEN)
