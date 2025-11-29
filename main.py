@@ -15,11 +15,18 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# YDL z obejściem blokad wiekowych (player_client = android)
 YDL_OPTIONS = {
     "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android"]
+        }
+    }
 }
+
 FFMPEG_OPTIONS = {
     "options": "-vn"
 }
@@ -265,6 +272,12 @@ async def resume(ctx):
         await ctx.send("▶️ Wznowiono.")
     else:
         await ctx.send("Nic nie jest zapauzowane.")
+
+
+# ------------------ START BOTA ------------------
+
+if __name__ == "__main__":
+    bot.run(TOKEN)
 
 
 # ------------------ START BOTA ------------------
