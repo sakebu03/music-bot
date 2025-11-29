@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import discord
 from discord.ext import commands
@@ -15,7 +16,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# YDL z obejściem blokad wiekowych (player_client = android)
+# YDL z obejściem części blokad (udaje klienta Android)
 YDL_OPTIONS = {
     "format": "bestaudio/best",
     "noplaylist": True,
@@ -33,6 +34,9 @@ FFMPEG_OPTIONS = {
 
 # Kolejki per serwer: guild_id -> {"queue": [song, ...], "history": [song, ...]}
 guild_players = {}
+
+# Prosty regex do sprawdzenia, czy query to URL YouTube
+YOUTUBE_URL_REGEX = re.compile(r"(https?://)?(www\.)?(youtube\.com|youtu\.be)/")
 
 
 def get_guild_player(guild_id: int):
@@ -85,11 +89,63 @@ async def play_next_in_queue(ctx):
 
 
 async def fetch_youtube_info(query: str):
-    """Pobiera info o utworze z YouTube (link albo wyszukiwanie)."""
-    with YoutubeDL(YDL_OPTIONS) as ydl:
-        info = ydl.extract_info(query, download=False)
-        if "entries" in info:
-            info = info["entries"][0]
+    """
+    Pobiera info o utworze z YouTube.
+    Jeśli film jest zablokowany (Sign in to confirm you’re not a bot),
+    a użytkownik podał sam tytuł, spróbujemy automatycznie innych wersji (lyrics / audio).
+    """
+
+    is_url = bool(YOUTUBE_URL_REGEX.search(query))
+
+    def _extract(q: str):
+        with YoutubeDL(YDL_OPTIONS) as ydl:
+            info = ydl.extract_info(q, download=False)
+            if "entries" in info:
+                info = info["entries"][0]
+            return info
+
+    try:
+        info = _extract(query)
+    except Exception as e:
+        msg = str(e)
+
+        # Specjalny przypadek: YouTube chce logowania / captchy
+        if "Sign in to confirm you’re not a bot" in msg:
+            # jeśli to był link – nie kombinujemy, prosimy o inną wersję
+            if is_url:
+                raise RuntimeError(
+                    "Ten konkretny film na YouTube wymaga zalogowania / potwierdzenia, "
+                    "że nie jesteś botem. Spróbuj innej wersji tej piosenki "
+                    "(np. lyrics / audio) albo wklej inny link."
+                )
+
+            # jeśli to nie był link – spróbujmy znaleźć inną wersję
+            fallback_queries = [
+                f"{query} lyrics",
+                f"{query} audio",
+                f"{query} official audio",
+            ]
+
+            last_error = e
+            for fq in fallback_queries:
+                try:
+                    info = _extract(fq)
+                    # jak się uda – przerywamy pętlę i lecimy dalej
+                    break
+                except Exception as fe:
+                    last_error = fe
+                    info = None
+
+            if not info:
+                # nic z fallbacków nie zadziałało
+                raise RuntimeError(
+                    "YouTube mocno blokuje ten utwór dla botów (wymaga logowania). "
+                    "Spróbuj podać inną wersję, np. inny tytuł / inny link."
+                ) from last_error
+        else:
+            # jakiś inny błąd yt-dlp
+            raise RuntimeError("Nie udało się pobrać informacji z YouTube.") from e
+
     return {
         "url": info["url"],
         "title": info.get("title", "Nieznany tytuł"),
@@ -163,8 +219,11 @@ async def play(ctx, *, query: str):
 
     try:
         song = await fetch_youtube_info(query)
-    except Exception as e:
-        await ctx.send(f"❌ Nie udało się pobrać informacji z YouTube.\n`{e}`")
+    except RuntimeError as e:
+        await ctx.send(f"❌ {e}")
+        return
+    except Exception:
+        await ctx.send("❌ Wystąpił nieznany błąd podczas pobierania utworu.")
         return
 
     # Jeśli nic nie gra i kolejka jest pusta -> odpal od razu
@@ -278,9 +337,4 @@ async def resume(ctx):
 
 if __name__ == "__main__":
     bot.run(TOKEN)
-
-
-# ------------------ START BOTA ------------------
-
-if __name__ == "__main__":
-    bot.run(TOKEN)
+.run(TOKEN)
